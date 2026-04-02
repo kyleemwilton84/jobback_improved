@@ -67,6 +67,29 @@
       color: var(--accent);
     }
 
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .logout-link {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+
+    .logout-link:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
     .socket-pill {
       display: inline-flex;
       align-items: center;
@@ -353,9 +376,12 @@
 
   <header class="app-header">
     <h1>Control <span>Panel</span></h1>
+    <div class="header-actions">
+    <a href="/dash/logout" class="logout-link" title="Sign out">Log out</a>
     <div class="socket-pill" id="socket-status" title="Socket connection">
       <span class="dot" aria-hidden="true"></span>
       <span id="socket-status-text">Connecting…</span>
+    </div>
     </div>
   </header>
 

