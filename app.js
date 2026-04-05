@@ -32,7 +32,8 @@ if (usePolling) {
         polling409Logged = true;
         console.error(
           'Telegram: stopped polling — another getUpdates client is using this bot token. ' +
-            'Run only one server process, or set TELEGRAM_WEBHOOK_URL on production and TELEGRAM_POLLING=0 elsewhere.'
+            'Inline buttons will NOT work on this process until you fix that (panel still works via Socket.IO). ' +
+            'Stop every other Node/server using this token, or use TELEGRAM_WEBHOOK_URL on your public server and TELEGRAM_POLLING=0 on this machine.'
         );
       }
       try {
@@ -42,6 +43,21 @@ if (usePolling) {
       }
     }
   });
+}
+
+function logTelegramDiagnostics() {
+  bot
+    .getWebHookInfo()
+    .then((info) => {
+      const url = info && info.url ? String(info.url) : '';
+      if (url && usePolling) {
+        console.warn(
+          'Telegram: a webhook is still registered on Telegram’s side while this app uses polling — updates may be misrouted. URL:',
+          url
+        );
+      }
+    })
+    .catch(() => {});
 }
 
 const SESSION_MAX_AGE_SHORT_MS = 24 * 60 * 60 * 1000;
@@ -635,7 +651,13 @@ server.listen(PORT, () => {
       .then(() => console.log('Telegram webhook registered:', TELEGRAM_WEBHOOK_URL))
       .catch((err) => console.error('Telegram setWebHook failed:', err));
   } else if (usePolling) {
-    bot.deleteWebHook().then(() => console.log('Telegram long polling active'));
+    bot
+      .deleteWebHook()
+      .then(() => {
+        console.log('Telegram long polling active');
+        setTimeout(logTelegramDiagnostics, 2000);
+      })
+      .catch((err) => console.error('Telegram deleteWebHook failed:', err));
   } else {
     console.log('Telegram: polling disabled (TELEGRAM_POLLING=0); use TELEGRAM_WEBHOOK_URL or enable polling on one process only.');
   }
