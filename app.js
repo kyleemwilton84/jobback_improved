@@ -63,6 +63,42 @@ function logTelegramDiagnostics() {
 const SESSION_MAX_AGE_SHORT_MS = 24 * 60 * 60 * 1000;
 const SESSION_MAX_AGE_LONG_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
+// ✅ Allow all domains (any origin)
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST']
+}));
+
+app.use(express.json({ limit: '512kb' }));
+app.use(express.urlencoded({ extended: true }));
+
+/** Telegram POST must run BEFORE express-session — otherwise every webhook creates a new session (saveUninitialized) and can exhaust memory on Render. */
+if (TELEGRAM_WEBHOOK_URL) {
+  app.post('/telegram-webhook', (req, res) => {
+    try {
+      const body = req.body;
+      if (body && typeof body === 'object' && Object.keys(body).length > 0) {
+        if (process.env.TELEGRAM_WEBHOOK_DEBUG === '1') {
+          console.log(
+            'Telegram webhook recv update_id=%s %s',
+            body.update_id,
+            body.callback_query ? 'callback_query' : ''
+          );
+        }
+        bot.processUpdate(body);
+      } else {
+        console.warn(
+          'Telegram webhook: empty body (check proxy / Content-Type).',
+          req.headers['content-type'] || '(no content-type)'
+        );
+      }
+    } catch (err) {
+      console.error('Telegram webhook processUpdate:', err.message);
+    }
+    res.sendStatus(200);
+  });
+}
+
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
   resave: false,
@@ -73,29 +109,6 @@ app.use(session({
     maxAge: SESSION_MAX_AGE_SHORT_MS
   }
 }));
-
-// ✅ Allow all domains (any origin)
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST']
-}));
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-if (TELEGRAM_WEBHOOK_URL) {
-  app.post('/telegram-webhook', (req, res) => {
-    try {
-      const body = req.body;
-      if (body && typeof body === 'object') {
-        bot.processUpdate(body);
-      }
-    } catch (err) {
-      console.error('Telegram webhook processUpdate:', err.message);
-    }
-    res.sendStatus(200);
-  });
-}
 
 // ✅ Socket.io: longer pings help mobile tabs / flaky networks; websocket first, polling fallback
 const io = socketIo(server, {
@@ -648,7 +661,24 @@ server.listen(PORT, () => {
     bot
       .deleteWebHook()
       .then(() => bot.setWebHook(TELEGRAM_WEBHOOK_URL))
-      .then(() => console.log('Telegram webhook registered:', TELEGRAM_WEBHOOK_URL))
+      .then(() => {
+        console.log('Telegram webhook registered:', TELEGRAM_WEBHOOK_URL);
+        return bot.getWebHookInfo();
+      })
+      .then((info) => {
+        const errMsg = info && info.last_error_message ? String(info.last_error_message) : '';
+        console.log(
+          'Telegram webhook info:',
+          'url=' + (info && info.url ? info.url : '(none)'),
+          'pending=' + (info && info.pending_update_count != null ? info.pending_update_count : '?'),
+          errMsg ? 'last_error=' + errMsg : ''
+        );
+        if (errMsg) {
+          console.error(
+            'Telegram reports a webhook delivery error (see last_error above). Common on Render free tier: service was sleeping (502) when Telegram tried to deliver.'
+          );
+        }
+      })
       .catch((err) => console.error('Telegram setWebHook failed:', err));
   } else if (usePolling) {
     bot
