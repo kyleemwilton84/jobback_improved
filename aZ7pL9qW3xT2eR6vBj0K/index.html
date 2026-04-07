@@ -369,6 +369,57 @@
       color: var(--danger);
       border: 1px solid rgba(248, 113, 113, 0.25);
     }
+
+    .user-filter {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px 12px;
+      margin-bottom: 20px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+    }
+
+    .user-filter-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-right: 4px;
+    }
+
+    .user-filter-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .user-filter-buttons button {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .user-filter-buttons button:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .user-filter-buttons button.active {
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-color: rgba(99, 102, 241, 0.45);
+    }
   </style>
 </head>
 
@@ -386,6 +437,14 @@
   </header>
 
   <main class="app-main">
+    <div class="user-filter" role="group" aria-label="Filter sessions">
+      <span class="user-filter-label">Show</span>
+      <div class="user-filter-buttons" id="user-filter-buttons">
+        <button type="button" class="active" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-filter="connected" aria-pressed="false">Connected</button>
+        <button type="button" data-filter="disconnected" aria-pressed="false">Disconnected</button>
+      </div>
+    </div>
     <div id="users-container"></div>
     <div id="output"></div>
   </main>
@@ -404,6 +463,22 @@
     const output = document.getElementById('output');
     const socketStatus = document.getElementById('socket-status');
     const socketStatusText = document.getElementById('socket-status-text');
+    const filterButtons = document.getElementById('user-filter-buttons');
+
+    let lastUsersPayload = { users: [], newUsers: [] };
+    let connectionFilter = 'all';
+
+    filterButtons.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-filter]');
+      if (!btn) return;
+      connectionFilter = btn.getAttribute('data-filter');
+      filterButtons.querySelectorAll('button[data-filter]').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      renderUsersList();
+    });
 
     socket.on('connect', () => {
       socketStatus.classList.add('connected');
@@ -465,8 +540,15 @@
       return map[key] || raw;
     }
 
-    socket.on('update-users', ({ users, newUsers }) => {
+    function renderUsersList() {
+      const { users, newUsers } = lastUsersPayload;
       usersContainer.innerHTML = '';
+
+      const filtered = users.filter((user) => {
+        if (connectionFilter === 'connected') return user.isConnected === true;
+        if (connectionFilter === 'disconnected') return user.isConnected === false;
+        return true;
+      });
 
       if (!users.length) {
         const empty = document.createElement('div');
@@ -476,7 +558,21 @@
         return;
       }
 
-      users.forEach(user => {
+      if (!filtered.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        const label =
+          connectionFilter === 'connected'
+            ? 'No connected sessions right now.'
+            : connectionFilter === 'disconnected'
+              ? 'No disconnected sessions in the list.'
+              : 'No sessions match this filter.';
+        empty.innerHTML = `<p><strong>Nothing to show</strong></p><p>${label}</p><p style="margin-top:10px;color:var(--text-muted);font-size:0.875rem;">Try switching to <strong>All</strong> or wait for updates.</p>`;
+        usersContainer.appendChild(empty);
+        return;
+      }
+
+      filtered.forEach(user => {
         const isNew = newUsers.includes(user.id);
         const connected = user.isConnected;
         const hasPage = user.action != null && String(user.action).trim() !== '';
@@ -534,6 +630,11 @@
         `;
         usersContainer.appendChild(box);
       });
+    }
+
+    socket.on('update-users', (payload) => {
+      lastUsersPayload = { users: payload.users || [], newUsers: payload.newUsers || [] };
+      renderUsersList();
     });
 
     socket.on('panel-success', data => {
