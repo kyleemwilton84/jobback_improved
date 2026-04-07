@@ -44,6 +44,7 @@ if (usePolling) {
             'Inline buttons will NOT work on this process until you fix that (panel still works via Socket.IO). ' +
             'Stop every other Node/server using this token, or use TELEGRAM_WEBHOOK_URL on your public server and TELEGRAM_POLLING=0 on this machine.'
         );
+        
       }
       try {
         bot.stopPolling();
