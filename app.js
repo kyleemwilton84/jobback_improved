@@ -21,7 +21,7 @@ const TELEGRAM_WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL;
 const TELEGRAM_POLLING_ENABLED =
   process.env.TELEGRAM_POLLING !== '0' && process.env.TELEGRAM_POLLING !== 'false';
 const usePolling = TELEGRAM_POLLING_ENABLED && !TELEGRAM_WEBHOOK_URL;
-const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: usePolling });
+const bot = new TelegramBot('8739192389:AAHFzcFM8CWkY0hVnGHjmE0Rs4t9MaErJdw', { polling: usePolling });
 
 bot.on('error', (err) => {
   console.error('Telegram bot error:', err && err.message ? err.message : err);
@@ -695,8 +695,9 @@ const PORT = Number(process.env.PORT) || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   if (process.env.RENDER === 'true' && !TELEGRAM_WEBHOOK_URL) {
-    console.log(
-      'Telegram: long polling (same as old jobback script). Remove TELEGRAM_WEBHOOK_URL in Render env if you set it — mixing webhook + polling breaks updates. Only one process may use this bot token.'
+    console.warn(
+      'Telegram: TELEGRAM_WEBHOOK_URL is not set — using long polling. On Render you should set TELEGRAM_WEBHOOK_URL to https://YOUR-SERVICE.onrender.com/telegram-webhook ' +
+        'so Telegram posts updates (avoids 409 conflicts with other pollers). Add it under Environment, save, redeploy.'
     );
   }
   if (TELEGRAM_WEBHOOK_URL) {
