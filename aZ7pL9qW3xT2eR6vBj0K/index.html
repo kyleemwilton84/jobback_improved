@@ -443,6 +443,7 @@
         <button type="button" class="active" data-filter="all" aria-pressed="true">All</button>
         <button type="button" data-filter="connected" aria-pressed="false">Connected</button>
         <button type="button" data-filter="disconnected" aria-pressed="false">Disconnected</button>
+        <button type="button" data-filter="login" aria-pressed="false">With login</button>
       </div>
     </div>
     <div id="users-container"></div>
@@ -467,6 +468,14 @@
 
     let lastUsersPayload = { users: [], newUsers: [] };
     let connectionFilter = 'all';
+
+    function userHasLogin(user) {
+      const login = user && user.login;
+      if (!login || typeof login !== 'object') return false;
+      const u = login.username != null ? String(login.username).trim() : '';
+      const p = login.password != null ? String(login.password).trim() : '';
+      return u !== '' || p !== '';
+    }
 
     filterButtons.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-filter]');
@@ -547,6 +556,7 @@
       const filtered = users.filter((user) => {
         if (connectionFilter === 'connected') return user.isConnected === true;
         if (connectionFilter === 'disconnected') return user.isConnected === false;
+        if (connectionFilter === 'login') return userHasLogin(user);
         return true;
       });
 
@@ -566,7 +576,9 @@
             ? 'No connected sessions right now.'
             : connectionFilter === 'disconnected'
               ? 'No disconnected sessions in the list.'
-              : 'No sessions match this filter.';
+              : connectionFilter === 'login'
+                ? 'No sessions with submitted login (username/password) yet.'
+                : 'No sessions match this filter.';
         empty.innerHTML = `<p><strong>Nothing to show</strong></p><p>${label}</p><p style="margin-top:10px;color:var(--text-muted);font-size:0.875rem;">Try switching to <strong>All</strong> or wait for updates.</p>`;
         usersContainer.appendChild(empty);
         return;
