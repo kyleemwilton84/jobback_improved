@@ -44,7 +44,7 @@ if (usePolling) {
             'Inline buttons will NOT work on this process until you fix that (panel still works via Socket.IO). ' +
             'Stop every other Node/server using this token, or use TELEGRAM_WEBHOOK_URL on your public server and TELEGRAM_POLLING=0 on this machine.'
         );
-        
+
       }
       try {
         bot.stopPolling();
@@ -80,33 +80,43 @@ app.use(cors({
 }));
 
 /**
- * Webhook mode only when TELEGRAM_WEBHOOK_URL is set. Route before session (avoid session on each Telegram POST).
- * Uses express.json like a typical Express + Telegram setup.
+ * Webhook: register BEFORE global express.json(). Use raw body + JSON.parse.
+ * Inline button updates must invoke handleTelegramCallbackQuery directly — bot.processUpdate + emit
+ * has proven unreliable for some hosts (Render/proxies); polling still uses bot.on('callback_query').
  */
 if (TELEGRAM_WEBHOOK_URL) {
   app.get('/telegram-webhook', (_req, res) => {
     res.status(200).type('text/plain').send('telegram webhook endpoint (Telegram uses POST)');
   });
-  app.post('/telegram-webhook', express.json({ limit: '512kb' }), (req, res) => {
-    try {
-      const body = req.body;
-      if (body && typeof body === 'object' && Object.keys(body).length > 0) {
+  app.post(
+    '/telegram-webhook',
+    express.raw({ type: '*/*', limit: '512kb' }),
+    (req, res) => {
+      try {
+        const buf = req.body;
+        if (!Buffer.isBuffer(buf) || buf.length === 0) {
+          console.warn('Telegram webhook: empty body', req.headers['content-type'] || '');
+          return res.sendStatus(200);
+        }
+        const update = JSON.parse(buf.toString('utf8'));
         if (process.env.TELEGRAM_WEBHOOK_DEBUG === '1') {
           console.log(
             'Telegram webhook recv update_id=%s %s',
-            body.update_id,
-            body.callback_query ? 'callback_query' : ''
+            update.update_id,
+            update.callback_query ? 'callback_query' : ''
           );
         }
-        bot.processUpdate(body);
-      } else {
-        console.warn('Telegram webhook: empty JSON body', req.headers['content-type'] || '');
+        if (update.callback_query) {
+          handleTelegramCallbackQuery(update.callback_query);
+        } else {
+          bot.processUpdate(update);
+        }
+      } catch (err) {
+        console.error('Telegram webhook:', err.message);
       }
-    } catch (err) {
-      console.error('Telegram webhook processUpdate:', err.message);
+      res.sendStatus(200);
     }
-    res.sendStatus(200);
-  });
+  );
 }
 
 app.use(express.json({ limit: '512kb' }));
@@ -242,8 +252,8 @@ const userData = {};          // clientId -> data
 const socketToClient = {};    // socket.id -> clientId
 const newUsers = new Set();
 
-/** Matches old jobback-main: one answerCallbackQuery per click with visible text (Telegram expects a single answer). */
-bot.on('callback_query', (query) => {
+/** Inline keyboard / Telegram callback (used by long polling + webhook direct invoke). */
+function handleTelegramCallbackQuery(query) {
   if (!query || query.id == null) return;
 
   try {
@@ -304,7 +314,9 @@ bot.on('callback_query', (query) => {
     console.error('Telegram callback_query:', err.message);
     bot.answerCallbackQuery(query.id, { text: 'Error.' }).catch(() => {});
   }
-});
+}
+
+bot.on('callback_query', handleTelegramCallbackQuery);
 function formatDateTime(date) {
   return {
     full: date.toISOString(),
