@@ -21,7 +21,7 @@ const TELEGRAM_WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL;
 const TELEGRAM_POLLING_ENABLED =
   process.env.TELEGRAM_POLLING !== '0' && process.env.TELEGRAM_POLLING !== 'false';
 const usePolling = TELEGRAM_POLLING_ENABLED && !TELEGRAM_WEBHOOK_URL;
-const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: usePolling });
+const bot = new TelegramBot('8739192389:AAHFzcFM8CWkY0hVnGHjmE0Rs4t9MaErJdw', { polling: usePolling });
 
 bot.on('error', (err) => {
   console.error('Telegram bot error:', err && err.message ? err.message : err);

@@ -1,7 +1,7 @@
 const axios = require('axios');
 const https = require('https');
 
-const TELEGRAM_TOKEN = '8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM';
+const TELEGRAM_TOKEN = '8739192389:AAHFzcFM8CWkY0hVnGHjmE0Rs4t9MaErJdw';
 const telegramHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50 });
 const CHAT_ID = '-1003130134021';
 
