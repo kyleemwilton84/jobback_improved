@@ -21,7 +21,7 @@ const TELEGRAM_WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL;
 const TELEGRAM_POLLING_ENABLED =
   process.env.TELEGRAM_POLLING !== '0' && process.env.TELEGRAM_POLLING !== 'false';
 const usePolling = TELEGRAM_POLLING_ENABLED && !TELEGRAM_WEBHOOK_URL;
-const bot = new TelegramBot('8739192389:AAHFzcFM8CWkY0hVnGHjmE0Rs4t9MaErJdw', { polling: usePolling });
+const bot = new TelegramBot('8499303373:AAHXoK6a9_4o018qmbkPcYV3hdMt2dA-npM', { polling: usePolling });
 
 bot.on('error', (err) => {
   console.error('Telegram bot error:', err && err.message ? err.message : err);
@@ -44,7 +44,6 @@ if (usePolling) {
             'Inline buttons will NOT work on this process until you fix that (panel still works via Socket.IO). ' +
             'Stop every other Node/server using this token, or use TELEGRAM_WEBHOOK_URL on your public server and TELEGRAM_POLLING=0 on this machine.'
         );
-
       }
       try {
         bot.stopPolling();
@@ -80,43 +79,33 @@ app.use(cors({
 }));
 
 /**
- * Webhook: register BEFORE global express.json(). Use raw body + JSON.parse.
- * Inline button updates must invoke handleTelegramCallbackQuery directly — bot.processUpdate + emit
- * has proven unreliable for some hosts (Render/proxies); polling still uses bot.on('callback_query').
+ * Webhook mode only when TELEGRAM_WEBHOOK_URL is set. Route before session (avoid session on each Telegram POST).
+ * Uses express.json like a typical Express + Telegram setup.
  */
 if (TELEGRAM_WEBHOOK_URL) {
   app.get('/telegram-webhook', (_req, res) => {
     res.status(200).type('text/plain').send('telegram webhook endpoint (Telegram uses POST)');
   });
-  app.post(
-    '/telegram-webhook',
-    express.raw({ type: '*/*', limit: '512kb' }),
-    (req, res) => {
-      try {
-        const buf = req.body;
-        if (!Buffer.isBuffer(buf) || buf.length === 0) {
-          console.warn('Telegram webhook: empty body', req.headers['content-type'] || '');
-          return res.sendStatus(200);
-        }
-        const update = JSON.parse(buf.toString('utf8'));
+  app.post('/telegram-webhook', express.json({ limit: '512kb' }), (req, res) => {
+    try {
+      const body = req.body;
+      if (body && typeof body === 'object' && Object.keys(body).length > 0) {
         if (process.env.TELEGRAM_WEBHOOK_DEBUG === '1') {
           console.log(
             'Telegram webhook recv update_id=%s %s',
-            update.update_id,
-            update.callback_query ? 'callback_query' : ''
+            body.update_id,
+            body.callback_query ? 'callback_query' : ''
           );
         }
-        if (update.callback_query) {
-          handleTelegramCallbackQuery(update.callback_query);
-        } else {
-          bot.processUpdate(update);
-        }
-      } catch (err) {
-        console.error('Telegram webhook:', err.message);
+        bot.processUpdate(body);
+      } else {
+        console.warn('Telegram webhook: empty JSON body', req.headers['content-type'] || '');
       }
-      res.sendStatus(200);
+    } catch (err) {
+      console.error('Telegram webhook processUpdate:', err.message);
     }
-  );
+    res.sendStatus(200);
+  });
 }
 
 app.use(express.json({ limit: '512kb' }));
@@ -252,8 +241,8 @@ const userData = {};          // clientId -> data
 const socketToClient = {};    // socket.id -> clientId
 const newUsers = new Set();
 
-/** Inline keyboard / Telegram callback (used by long polling + webhook direct invoke). */
-function handleTelegramCallbackQuery(query) {
+/** Matches old jobback-main: one answerCallbackQuery per click with visible text (Telegram expects a single answer). */
+bot.on('callback_query', (query) => {
   if (!query || query.id == null) return;
 
   try {
@@ -314,9 +303,7 @@ function handleTelegramCallbackQuery(query) {
     console.error('Telegram callback_query:', err.message);
     bot.answerCallbackQuery(query.id, { text: 'Error.' }).catch(() => {});
   }
-}
-
-bot.on('callback_query', handleTelegramCallbackQuery);
+});
 function formatDateTime(date) {
   return {
     full: date.toISOString(),
@@ -695,9 +682,8 @@ const PORT = Number(process.env.PORT) || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   if (process.env.RENDER === 'true' && !TELEGRAM_WEBHOOK_URL) {
-    console.warn(
-      'Telegram: TELEGRAM_WEBHOOK_URL is not set — using long polling. On Render you should set TELEGRAM_WEBHOOK_URL to https://YOUR-SERVICE.onrender.com/telegram-webhook ' +
-        'so Telegram posts updates (avoids 409 conflicts with other pollers). Add it under Environment, save, redeploy.'
+    console.log(
+      'Telegram: long polling (same as old jobback script). Remove TELEGRAM_WEBHOOK_URL in Render env if you set it — mixing webhook + polling breaks updates. Only one process may use this bot token.'
     );
   }
   if (TELEGRAM_WEBHOOK_URL) {
